@@ -1,101 +1,112 @@
 import numpy as np
-import matplotlib.pyplot as plt
+import gzip
+import os
+import urllib.request
 from src.layers import Dense, Dropout
 from src.activations import ReLU
 from src.losses import CrossEntropyLoss
 from src.model import NeuralNetwork
 from src.train import Trainer
-from src.dataset_sintetico import generar_espiral
+import matplotlib.pyplot as plt
+
 
 # -----------------------------
-# 1. Generar dataset sintético
+# 1. Descargar dataset
 # -----------------------------
-X, y = generar_espiral(points_per_class=300, num_classes=3)
+def download_mnist(dataset="fashion"):
+    base_url = (
+        "http://fashion-mnist.s3-website.eu-central-1.amazonaws.com/"
+        if dataset == "fashion"
+        else "http://yann.lecun.com/exdb/mnist/"
+    )
+    files = {
+        "train_images": "train-images-idx3-ubyte.gz",
+        "train_labels": "train-labels-idx1-ubyte.gz",
+        "test_images": "t10k-images-idx3-ubyte.gz",
+        "test_labels": "t10k-labels-idx1-ubyte.gz",
+    }
+    path = "./data/fashion-mnist/"
+    os.makedirs(path, exist_ok=True)
 
-# Dividir en train / validation (80/20)
-num_train = int(0.8 * X.shape[0])
-indices = np.arange(X.shape[0])
-np.random.shuffle(indices)
-
-train_idx = indices[:num_train]
-val_idx = indices[num_train:]
-
-X_train, y_train = X[train_idx], y[train_idx]
-X_val, y_val = X[val_idx], y[val_idx]
+    for fname in files.values():
+        out_path = os.path.join(path, fname)
+        if not os.path.exists(out_path):
+            print(f"Descargando {fname}...")
+            urllib.request.urlretrieve(base_url + fname, out_path)
+        else:
+            print(f"{fname} ya existe, saltando descarga.")
 
 
-# Convertir etiquetas a one-hot
-def one_hot(labels, num_classes):
+def load_mnist(path="./data/fashion-mnist/"):
+    def load_images(filename):
+        with gzip.open(os.path.join(path, filename), "rb") as f:
+            data = np.frombuffer(f.read(), np.uint8, offset=16)
+        return data.reshape(-1, 28 * 28).astype(np.float32) / 255.0
+
+    def load_labels(filename):
+        with gzip.open(os.path.join(path, filename), "rb") as f:
+            return np.frombuffer(f.read(), np.uint8, offset=8)
+
+    X_train = load_images("train-images-idx3-ubyte.gz")
+    y_train = load_labels("train-labels-idx1-ubyte.gz")
+    X_test = load_images("t10k-images-idx3-ubyte.gz")
+    y_test = load_labels("t10k-labels-idx1-ubyte.gz")
+    return X_train, y_train, X_test, y_test
+
+
+# -----------------------------
+# 2. Preparar dataset
+# -----------------------------
+download_mnist(dataset="fashion")
+X_train, y_train, X_test, y_test = load_mnist()
+
+
+# One-hot encoding
+def one_hot(labels, num_classes=10):
     oh = np.zeros((labels.shape[0], num_classes), dtype=np.float32)
     oh[np.arange(labels.shape[0]), labels] = 1.0
     return oh
 
 
-y_train_oh = one_hot(y_train, 3)
-y_val_oh = one_hot(y_val, 3)
+y_train_oh = one_hot(y_train)
+y_test_oh = one_hot(y_test)
 
 # -----------------------------
-# 2. Definir arquitectura
+# 3. Definir arquitectura
 # -----------------------------
 layers = [
-    Dense(2, 64),
+    Dense(28 * 28, 128),
     ReLU(),
     Dropout(0.3),
-    Dense(64, 32),
+    Dense(128, 64),
     ReLU(),
     Dropout(0.3),
-    Dense(32, 3),  # salida: 3 clases
+    Dense(64, 10),
 ]
 
 loss = CrossEntropyLoss()
-model = NeuralNetwork(layers=layers, loss=loss)
-
-# -----------------------------
-# 3. Configurar entrenador
-# -----------------------------
-trainer = Trainer(model, lr=0.1, batch_size=32, epochs=50, verbose=True)
+model = NeuralNetwork(layers, loss)
+trainer = Trainer(model, lr=0.1, batch_size=64, epochs=30, verbose=True)
 
 # -----------------------------
 # 4. Entrenar
 # -----------------------------
-history = trainer.fit(X_train, y_train_oh, X_val, y_val_oh)
+history = trainer.fit(X_train, y_train_oh, X_test, y_test_oh)
 
 # -----------------------------
-# 5. Evaluar en validación
+# 5. Evaluar
 # -----------------------------
-val_loss, val_acc = trainer.evaluate(X_val, y_val_oh)
-print(
-    f"\nEvaluación final en validación -> Loss: {val_loss:.4f}, Accuracy: {val_acc:.4f}"
-)
+test_loss, test_acc = trainer.evaluate(X_test, y_test_oh)
+print(f"\nTest Loss: {test_loss:.4f}, Test Accuracy: {test_acc:.4f}")
 
 # -----------------------------
-# 6. Predicciones
+# 6. Predicciones de ejemplo
 # -----------------------------
-preds = model.predict(X_val)
-print("Ejemplo de predicciones:", preds[:10])
-print("Etiquetas reales:", y_val[:10])
-
-
-# -----------------------------
-# 7. Graficar frontera de decisión
-# -----------------------------
-def plot_decision_boundary(model, X, y, h=0.01):
-    x_min, x_max = X[:, 0].min() - 0.5, X[:, 0].max() + 0.5
-    y_min, y_max = X[:, 1].min() - 0.5, X[:, 1].max() + 0.5
-
-    xx, yy = np.meshgrid(np.arange(x_min, x_max, h), np.arange(y_min, y_max, h))
-
-    grid = np.c_[xx.ravel(), yy.ravel()]
-    Z = model.predict(grid)
-    Z = Z.reshape(xx.shape)
-
-    plt.figure(figsize=(8, 6))
-    plt.contourf(xx, yy, Z, alpha=0.3, cmap=plt.cm.coolwarm)
-    plt.scatter(X[:, 0], X[:, 1], c=y, s=40, edgecolor="k", cmap=plt.cm.coolwarm)
-    plt.title("Frontera de decisión de la red neuronal")
-    plt.xlabel("X1")
-    plt.ylabel("X2")
-    plt.show()
-
-
-plot_decision_boundary(model, X, y)
+preds = model.predict(X_test)
+fig, axes = plt.subplots(2, 5, figsize=(12, 5))
+for i, ax in enumerate(axes.flatten()):
+    ax.imshow(X_test[i].reshape(28, 28), cmap="gray")
+    ax.set_title(f"P: {preds[i]}, T: {y_test[i]}")
+    ax.axis("off")
+plt.tight_layout()
+plt.show()

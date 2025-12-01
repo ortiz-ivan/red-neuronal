@@ -68,11 +68,21 @@ class Trainer:
         logits = self.model.forward(X)
         loss = self.model.loss.forward(logits, y)
 
-        preds = logits.argmax(axis=1)
-        acc = np.mean(preds == y)
+        # convertir one-hot a índices si es necesario
+        if len(y.shape) > 1 and y.shape[1] > 1:
+            y_labels = np.argmax(y, axis=1)
+        else:
+            y_labels = y
 
+        preds = self.model.predict(X)
+        acc = np.mean(preds == y_labels)
         return loss, acc
 
     def _accuracy(self, X, y):
+        # Si y tiene más de 1 dimensión (one-hot), convertir a índices
+        if len(y.shape) > 1 and y.shape[1] > 1:
+            y_labels = np.argmax(y, axis=1)
+        else:
+            y_labels = y
         preds = self.model.predict(X)
-        return np.mean(preds == y)
+        return np.mean(preds == y_labels)
